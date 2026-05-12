@@ -12,7 +12,7 @@ from slowapi.util import get_remote_address
 from starlette.background import BackgroundTask
 
 from app.config import settings
-from app.services.chunker import MAX_CHUNK_CHARS, chunk_text as split_into_chunks
+from app.services.chunker import MAX_CHUNK_CHARS, chunk_text as split_into_chunks, needs_normalization
 from app.services.normalizer import normalizer
 from app.services.synthesizer import (
     DEFAULT_VOICE,
@@ -88,42 +88,59 @@ async def tts_stream(request: Request, req: TTSRequest):
     """
     async def generate():
         try:
-            # ── 1. split into sentence chunks ─────────────────────────────
+            # ── 1. chunk + smart normalize decision ───────────────────────
             chunks = split_into_chunks(req.text, max_chars=MAX_CHUNK_CHARS)
             total  = len(chunks)
-            yield _sse("start", total_chunks=total)
-            logger.info("chunked into %d parts len=%d", total, len(req.text))
+            do_norm = req.normalize and needs_normalization(req.text)
+            yield _sse("start", total_chunks=total, normalizing=do_norm)
+            logger.info("chunks=%d normalize=%s len=%d", total, do_norm, len(req.text))
 
-            # ── 2. normalize all chunks in parallel ───────────────────────
-            if req.normalize:
-                yield _sse("progress", msg=f"Normalizing {total} chunk(s) with Gemma…", total_chunks=total)
-                norm_results = await asyncio.gather(
-                    *[normalizer.normalize(c, model=req.model) for c in chunks]
+            # ── 2. fully parallel pipeline: each chunk normalize→synthesize ──
+            # Uses a queue so SSE events stream as chunks complete (not after all)
+            queue: asyncio.Queue = asyncio.Queue()
+
+            async def _process(chunk: str, idx: int) -> None:
+                norm = (
+                    await normalizer.normalize(chunk, model=req.model)
+                    if do_norm else chunk
                 )
-                norm_chunks = list(norm_results)
-                yield _sse("normalized_all",
-                           chunks=[{"index": i, "text": t} for i, t in enumerate(norm_chunks)])
-            else:
-                norm_chunks = chunks
+                await queue.put(("norm", idx, norm))
+                path = await synthesize(norm, slow=req.slow, voice=req.voice)
+                await queue.put(("done", idx, norm, path))
 
-            # ── 3. synthesize each chunk, stream per-chunk progress ───────
-            audio_paths: list[str] = []
-            for i, norm_chunk in enumerate(norm_chunks):
-                pct = int(i / total * 100)
-                yield _sse("chunk_start", chunk=i + 1, total=total, percent=pct,
-                           preview=norm_chunk[:60])
-                path = await synthesize(norm_chunk, slow=req.slow, voice=req.voice)
-                audio_paths.append(path)
-                yield _sse("chunk_done", chunk=i + 1, total=total,
-                           percent=int((i + 1) / total * 100))
+            tasks = [asyncio.create_task(_process(c, i)) for i, c in enumerate(chunks)]
 
-            # ── 4. merge chunks ───────────────────────────────────────────
+            # ── 3. stream events as each chunk finishes ───────────────────
+            norm_map:  dict[int, str]  = {}
+            audio_map: dict[int, str]  = {}
+            done_count = 0
+
+            while done_count < total:
+                ev = await queue.get()
+                if ev[0] == "norm":
+                    _, idx, norm = ev
+                    norm_map[idx] = norm
+                    yield _sse("chunk_norm", chunk=idx + 1, total=total,
+                               preview=norm[:80])
+                elif ev[0] == "done":
+                    _, idx, norm, path = ev
+                    audio_map[idx] = path
+                    done_count += 1
+                    yield _sse("chunk_done", chunk=idx + 1, total=total,
+                               percent=int(done_count / total * 100))
+
+            await asyncio.gather(*tasks)   # propagate any exceptions
+
+            # ── 4. merge in original order ────────────────────────────────
+            ordered_paths = [audio_map[i] for i in range(total)]
             if total > 1:
-                yield _sse("progress", msg=f"Merging {total} audio chunks…")
-            final_path = await merge_audio(audio_paths)
+                yield _sse("progress", msg=f"Merging {total} chunks…")
+            final_path = await merge_audio(ordered_paths)
 
             audio_id = store_audio(final_path)
-            yield _sse("ready", audio_id=audio_id, total_chunks=total)
+            norm_list = [norm_map.get(i, chunks[i]) for i in range(total)]
+            yield _sse("ready", audio_id=audio_id, total_chunks=total,
+                       normalized_chunks=norm_list)
             yield _sse("done")
 
         except Exception as exc:

@@ -122,28 +122,28 @@ if generate:
 
                     if etype == "start":
                         total = event.get("total_chunks", 1)
-                        chunk_label.write(f"Split into **{total}** chunk(s)")
+                        norm_flag = event.get("normalizing", False)
+                        chunk_label.write(
+                            f"**{total}** chunk(s) — "
+                            + ("normalizing with Gemma…" if norm_flag else "synthesis only (no normalization needed)")
+                        )
 
                     elif etype == "progress":
                         chunk_label.write(event["msg"])
 
-                    elif etype == "normalized_all":
-                        norm_chunks = [c["text"] for c in event.get("chunks", [])]
-                        chunk_label.write(f"Normalized {len(norm_chunks)} chunk(s)")
-
-                    elif etype == "chunk_start":
-                        pct  = event.get("percent", 0)
+                    elif etype == "chunk_norm":
                         c, t = event["chunk"], event["total"]
-                        progress_bar.progress(pct, text=f"Synthesizing chunk {c}/{t}…")
-                        chunk_label.write(f"chunk {c}/{t}: _{event.get('preview','')}_")
+                        chunk_label.write(f"Normalized {c}/{t}: _{event.get('preview','')}_")
 
                     elif etype == "chunk_done":
-                        progress_bar.progress(event.get("percent", 100),
-                                              text=f"Chunk {event['chunk']}/{event['total']} done")
+                        pct = event.get("percent", 100)
+                        c, t = event["chunk"], event["total"]
+                        progress_bar.progress(pct, text=f"Synthesized {c}/{t} chunk(s)…")
 
                     elif etype == "ready":
-                        audio_id = event["audio_id"]
-                        progress_bar.progress(100, text="All chunks synthesized!")
+                        audio_id    = event["audio_id"]
+                        norm_chunks = event.get("normalized_chunks", [])
+                        progress_bar.progress(100, text="Done!")
                         status.update(label="Speech ready!", state="complete", expanded=False)
 
                     elif etype == "error":

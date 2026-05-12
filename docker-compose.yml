@@ -50,6 +50,10 @@ services:
     image: ollama/ollama:latest
     volumes:
       - ${HOME}/.ollama:/root/.ollama   # reuse locally downloaded models
+    environment:
+      OLLAMA_KEEP_ALIVE: "-1"          # keep model loaded permanently
+      OLLAMA_NUM_PARALLEL: "4"         # concurrent inference requests
+      OLLAMA_MAX_LOADED_MODELS: "1"
     healthcheck:
       test: ["CMD", "ollama", "list"]
       interval: 20s
