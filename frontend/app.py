@@ -1,6 +1,6 @@
-"""Bangla TTS — Streamlit frontend."""
+"""Bangla TTS — Streamlit frontend with SSE streaming."""
 
-import io
+import json
 import os
 import urllib.parse
 
@@ -11,62 +11,158 @@ API_URL = os.environ.get("API_URL", "http://localhost:8000")
 
 st.set_page_config(
     page_title="Bangla TTS",
-    page_icon="assets/icon.png" if os.path.exists("assets/icon.png") else None,
     layout="centered",
     initial_sidebar_state="collapsed",
 )
 
-# ── styles ────────────────────────────────────────────────────────────────────
 st.markdown("""
 <style>
   .block-container { max-width: 780px; padding-top: 2rem; }
   .stAudio { margin-top: 1rem; }
-  .badge { background:#1e3a5f; color:#fff; padding:2px 8px;
-           border-radius:4px; font-size:.8rem; }
 </style>
 """, unsafe_allow_html=True)
 
 # ── header ────────────────────────────────────────────────────────────────────
 st.title("Bangla Text-to-Speech")
-st.caption("Powered by Gemma (normalisation) + gTTS (synthesis)")
+st.caption("Gemma normalisation  •  Microsoft edge-tts synthesis  •  SSE streaming")
 st.divider()
 
-# ── sidebar: settings ─────────────────────────────────────────────────────────
+# ── sidebar ───────────────────────────────────────────────────────────────────
 with st.sidebar:
     st.header("Settings")
+
+    # fetch voices from API
+    try:
+        vresp = requests.get(f"{API_URL}/tts/voices", timeout=3)
+        voice_map: dict = vresp.json()["voices"] if vresp.ok else {}
+        default_voice = vresp.json().get("default", "bn-BD-NabanitaNeural") if vresp.ok else "bn-BD-NabanitaNeural"
+    except Exception:
+        voice_map = {
+            "female-bd": "bn-BD-NabanitaNeural",
+            "male-bd":   "bn-BD-PradeepNeural",
+            "female-in": "bn-IN-TanishaaNeural",
+            "male-in":   "bn-IN-BashkarNeural",
+        }
+        default_voice = "bn-BD-NabanitaNeural"
+
+    voice_label = st.selectbox("Voice", list(voice_map.keys()), index=0)
+    voice = voice_map[voice_label]
+
     model   = st.text_input("Gemma model", value="gemma3:4b")
-    slow    = st.checkbox("Slow speech", value=False)
-    do_norm = st.checkbox("Normalize text with Gemma", value=True,
+    slow    = st.checkbox("Slow speech")
+    do_norm = st.checkbox("Normalize with Gemma", value=True,
                           help="Expand numbers, abbreviations before synthesis")
+
     st.divider()
-    if st.button("Check API health"):
+    if st.button("API health"):
         try:
             r = requests.get(f"{API_URL}/health", timeout=5)
-            data = r.json()
-            st.json(data)
+            st.json(r.json())
         except Exception as exc:
-            st.error(f"Cannot reach API: {exc}")
+            st.error(str(exc))
 
-# ── main area ─────────────────────────────────────────────────────────────────
+# ── main ──────────────────────────────────────────────────────────────────────
 text = st.text_area(
     "Enter Bangla text",
     placeholder="এখানে বাংলা লিখুন…",
     height=180,
     max_chars=5000,
 )
-
-char_count = len(text)
-st.caption(f"{char_count} / 5000 characters")
+st.caption(f"{len(text)} / 5000 characters")
 
 col_gen, col_norm = st.columns([1, 1])
+generate       = col_gen.button("Generate Speech", type="primary", use_container_width=True)
+normalize_only = col_norm.button("Normalize only",               use_container_width=True)
 
-with col_gen:
-    generate = st.button("Generate Speech", type="primary", use_container_width=True)
 
-with col_norm:
-    normalize_only = st.button("Normalize only", use_container_width=True)
+# ── SSE stream helper ─────────────────────────────────────────────────────────
 
-# ── normalize-only action ─────────────────────────────────────────────────────
+def stream_tts(payload: dict):
+    """POST to /tts/stream and yield parsed SSE events."""
+    with requests.post(
+        f"{API_URL}/tts/stream",
+        json=payload,
+        stream=True,
+        timeout=180,
+    ) as resp:
+        resp.raise_for_status()
+        for raw in resp.iter_lines(decode_unicode=True):
+            if raw.startswith("data: "):
+                try:
+                    yield json.loads(raw[6:])
+                except json.JSONDecodeError:
+                    pass
+
+
+# ── generate speech ───────────────────────────────────────────────────────────
+
+if generate:
+    if not text.strip():
+        st.warning("Please enter some Bangla text first.")
+    else:
+        payload = {
+            "text":      text,
+            "model":     model,
+            "normalize": do_norm,
+            "slow":      slow,
+            "voice":     voice,
+        }
+
+        audio_id   = None
+        norm_text  = None
+        error_msg  = None
+
+        with st.status("Generating Bangla speech…", expanded=True) as status:
+            try:
+                for event in stream_tts(payload):
+                    etype = event.get("type")
+
+                    if etype == "progress":
+                        st.write(event["msg"])
+
+                    elif etype == "normalized":
+                        norm_text = event["text"]
+                        st.write(f"Normalized: _{norm_text}_")
+
+                    elif etype == "ready":
+                        audio_id = event["audio_id"]
+                        status.update(label="Speech ready!", state="complete", expanded=False)
+
+                    elif etype == "error":
+                        error_msg = event["msg"]
+                        status.update(label="Failed", state="error")
+                        st.error(error_msg)
+
+            except requests.exceptions.ConnectionError:
+                status.update(label="Connection error", state="error")
+                st.error(f"Cannot reach API at {API_URL}")
+            except requests.exceptions.Timeout:
+                status.update(label="Timed out", state="error")
+                st.error("Request timed out — model may still be loading.")
+            except Exception as exc:
+                status.update(label="Error", state="error")
+                st.error(str(exc))
+
+        if audio_id:
+            audio_resp = requests.get(f"{API_URL}/tts/audio/{audio_id}", timeout=30)
+            if audio_resp.ok:
+                if do_norm and norm_text:
+                    with st.expander("Normalized text"):
+                        st.write(norm_text)
+                st.audio(audio_resp.content, format="audio/mp3")
+                st.download_button(
+                    "Download MP3",
+                    data=audio_resp.content,
+                    file_name="bangla_tts.mp3",
+                    mime="audio/mpeg",
+                    use_container_width=True,
+                )
+            else:
+                st.error("Audio expired — please generate again.")
+
+
+# ── normalize only ────────────────────────────────────────────────────────────
+
 if normalize_only:
     if not text.strip():
         st.warning("Please enter some Bangla text first.")
@@ -80,66 +176,17 @@ if normalize_only:
                 )
                 if r.ok:
                     data = r.json()
-                    st.success("Normalization complete")
+                    st.success("Done")
                     st.markdown("**Original:**")
                     st.code(data["original"], language=None)
                     st.markdown("**Normalized:**")
                     st.code(data["normalized"], language=None)
                 else:
                     st.error(r.json().get("detail", "Unknown error"))
-            except requests.exceptions.ConnectionError:
-                st.error(f"Cannot connect to API at {API_URL}")
             except Exception as exc:
                 st.error(str(exc))
 
-# ── generate speech action ────────────────────────────────────────────────────
-if generate:
-    if not text.strip():
-        st.warning("Please enter some Bangla text first.")
-    else:
-        with st.spinner("Synthesizing speech…"):
-            try:
-                r = requests.post(
-                    f"{API_URL}/tts",
-                    json={
-                        "text":      text,
-                        "model":     model,
-                        "normalize": do_norm,
-                        "slow":      slow,
-                    },
-                    timeout=120,
-                )
-
-                if r.ok:
-                    # show normalized text if available
-                    norm_header = r.headers.get("X-Normalized-Text", "")
-                    if norm_header and do_norm:
-                        normalized = urllib.parse.unquote(norm_header)
-                        with st.expander("Normalized text (what was spoken)", expanded=True):
-                            st.write(normalized)
-
-                    st.audio(r.content, format="audio/mp3")
-
-                    st.download_button(
-                        label="Download MP3",
-                        data=r.content,
-                        file_name="bangla_tts.mp3",
-                        mime="audio/mpeg",
-                        use_container_width=True,
-                    )
-                    st.success(f"Done — {len(r.content) / 1024:.1f} KB audio generated")
-
-                else:
-                    detail = r.json().get("detail", r.text)
-                    st.error(f"API error {r.status_code}: {detail}")
-
-            except requests.exceptions.ConnectionError:
-                st.error(f"Cannot connect to API at {API_URL}. Is the backend running?")
-            except requests.exceptions.Timeout:
-                st.error("Request timed out — the model may still be loading.")
-            except Exception as exc:
-                st.error(str(exc))
 
 # ── footer ────────────────────────────────────────────────────────────────────
 st.divider()
-st.caption("API: [/api/docs](/api/docs) | [/health](/health) | github.com/rejRoky/bangla-tts-gemma")
+st.caption("API docs: [/api/docs](/api/docs)  •  Health: [/health](/health)")

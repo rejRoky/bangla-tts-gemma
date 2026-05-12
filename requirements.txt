@@ -2,6 +2,7 @@ fastapi>=0.115
 uvicorn[standard]>=0.30
 gunicorn>=22.0
 ollama>=0.3
+edge-tts>=6.1
 gtts>=2.5
 pydantic-settings>=2.0
 slowapi>=0.1.9
