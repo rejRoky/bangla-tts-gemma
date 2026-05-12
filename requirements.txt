@@ -1,0 +1,4 @@
+ollama
+gtts
+pygame
+gradio
