@@ -26,6 +26,24 @@ Key behaviours:
 
 ---
 
+## Model — Gemma 4 (8B)
+
+| Property | Value |
+| --- | --- |
+| Model ID | `gemma4` (`gemma4:latest`) |
+| Parameters | 8B |
+| Architecture | Gemma 4 |
+| Context length | 131,072 tokens |
+| Quantization | Q4_K_M |
+| Size on disk | ~9.6 GB |
+| Capabilities | completion · vision · audio · tools · **thinking** |
+| Served by | [Ollama](https://ollama.com) |
+
+Gemma 4 is used exclusively for **text normalisation** — expanding Bengali numerals, abbreviations, and mixed-script spans into speakable Bangla — before passing the result to edge-tts for synthesis.  
+Clean Bangla text that needs no normalisation skips the model entirely.
+
+---
+
 ## Quick start (Docker)
 
 ```bash
