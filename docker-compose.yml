@@ -49,32 +49,16 @@ services:
   ollama:
     image: ollama/ollama:latest
     volumes:
-      - ollama_models:/root/.ollama
+      - ${HOME}/.ollama:/root/.ollama   # reuse locally downloaded models
     healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost:11434/api/tags || exit 1"]
-      interval: 30s
+      test: ["CMD", "ollama", "list"]
+      interval: 20s
       timeout: 10s
       retries: 5
-      start_period: 60s
+      start_period: 30s
     restart: unless-stopped
     networks:
       - tts-net
-
-  # ── one-shot: pull the model then exit ────────────────────────────────────
-  model-puller:
-    image: ollama/ollama:latest
-    depends_on:
-      ollama:
-        condition: service_healthy
-    entrypoint: ["ollama", "pull", "${GEMMA_MODEL:-gemma3:4b}"]
-    environment:
-      OLLAMA_HOST: http://ollama:11434
-    networks:
-      - tts-net
-    restart: "no"
-
-volumes:
-  ollama_models:
 
 networks:
   tts-net:
