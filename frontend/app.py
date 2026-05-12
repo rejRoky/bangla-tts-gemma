@@ -108,24 +108,42 @@ if generate:
             "voice":     voice,
         }
 
-        audio_id   = None
-        norm_text  = None
-        error_msg  = None
+        audio_id    = None
+        norm_chunks: list[str] = []
+        error_msg   = None
 
         with st.status("Generating Bangla speech…", expanded=True) as status:
+            progress_bar = st.progress(0)
+            chunk_label  = st.empty()
+
             try:
                 for event in stream_tts(payload):
                     etype = event.get("type")
 
-                    if etype == "progress":
-                        st.write(event["msg"])
+                    if etype == "start":
+                        total = event.get("total_chunks", 1)
+                        chunk_label.write(f"Split into **{total}** chunk(s)")
 
-                    elif etype == "normalized":
-                        norm_text = event["text"]
-                        st.write(f"Normalized: _{norm_text}_")
+                    elif etype == "progress":
+                        chunk_label.write(event["msg"])
+
+                    elif etype == "normalized_all":
+                        norm_chunks = [c["text"] for c in event.get("chunks", [])]
+                        chunk_label.write(f"Normalized {len(norm_chunks)} chunk(s)")
+
+                    elif etype == "chunk_start":
+                        pct  = event.get("percent", 0)
+                        c, t = event["chunk"], event["total"]
+                        progress_bar.progress(pct, text=f"Synthesizing chunk {c}/{t}…")
+                        chunk_label.write(f"chunk {c}/{t}: _{event.get('preview','')}_")
+
+                    elif etype == "chunk_done":
+                        progress_bar.progress(event.get("percent", 100),
+                                              text=f"Chunk {event['chunk']}/{event['total']} done")
 
                     elif etype == "ready":
                         audio_id = event["audio_id"]
+                        progress_bar.progress(100, text="All chunks synthesized!")
                         status.update(label="Speech ready!", state="complete", expanded=False)
 
                     elif etype == "error":
@@ -146,9 +164,10 @@ if generate:
         if audio_id:
             audio_resp = requests.get(f"{API_URL}/tts/audio/{audio_id}", timeout=30)
             if audio_resp.ok:
-                if do_norm and norm_text:
-                    with st.expander("Normalized text"):
-                        st.write(norm_text)
+                if do_norm and norm_chunks:
+                    with st.expander(f"Normalized text ({len(norm_chunks)} chunk(s))"):
+                        for i, c in enumerate(norm_chunks, 1):
+                            st.markdown(f"**{i}.** {c}")
                 st.audio(audio_resp.content, format="audio/mp3")
                 st.download_button(
                     "Download MP3",

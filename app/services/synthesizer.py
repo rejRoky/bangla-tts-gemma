@@ -80,6 +80,43 @@ async def _synthesize_gtts(text: str, slow: bool) -> str:
     return await loop.run_in_executor(None, partial(_synthesize_gtts_sync, text, slow))
 
 
+# ── audio merge (pydub + ffmpeg) ─────────────────────────────────────────────
+
+def _merge_sync(paths: list[str]) -> str:
+    fd, out = tempfile.mkstemp(suffix=".mp3", prefix="btts_merged_")
+    os.close(fd)
+    try:
+        # prefer pydub + ffmpeg for clean crossfade-free joins
+        from pydub import AudioSegment
+        combined = AudioSegment.empty()
+        for p in paths:
+            combined += AudioSegment.from_mp3(p)
+        combined.export(out, format="mp3", bitrate="64k")
+    except Exception:
+        # fallback: raw byte concat (works for same-bitrate edge-tts output)
+        logger.warning("pydub/ffmpeg unavailable, using raw MP3 concat")
+        with open(out, "wb") as fout:
+            for p in paths:
+                with open(p, "rb") as fin:
+                    fout.write(fin.read())
+    finally:
+        for p in paths:
+            try:
+                os.unlink(p)
+            except OSError:
+                pass
+    logger.debug("merged %d chunks → %s (%d bytes)", len(paths), out, os.path.getsize(out))
+    return out
+
+
+async def merge_audio(paths: list[str]) -> str:
+    """Merge a list of MP3 files into one. Cleans up input files."""
+    if len(paths) == 1:
+        return paths[0]
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(None, partial(_merge_sync, paths))
+
+
 # ── public API ────────────────────────────────────────────────────────────────
 
 async def synthesize(

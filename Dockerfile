@@ -9,6 +9,10 @@ RUN pip install --no-cache-dir --prefix=/install -r requirements.txt
 # ── Stage 2: lean runtime image ───────────────────────────────────────────────
 FROM python:3.12-slim
 
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends ffmpeg \
+ && rm -rf /var/lib/apt/lists/*
+
 # non-root user
 RUN groupadd --system app && useradd --system --gid app --no-create-home app
 

@@ -7,3 +7,4 @@ gtts>=2.5
 pydantic-settings>=2.0
 slowapi>=0.1.9
 python-multipart>=0.0.9
+pydub>=0.25

@@ -11,10 +11,12 @@ from slowapi.util import get_remote_address
 from starlette.background import BackgroundTask
 
 from app.config import settings
+from app.services.chunker import MAX_CHUNK_CHARS, chunk_text as split_into_chunks
 from app.services.normalizer import normalizer
 from app.services.synthesizer import (
     DEFAULT_VOICE,
     VOICES,
+    merge_audio,
     pop_audio,
     store_audio,
     synthesize,
@@ -85,20 +87,42 @@ async def tts_stream(request: Request, req: TTSRequest):
     """
     async def generate():
         try:
-            yield _sse("start")
+            # ── 1. split into sentence chunks ─────────────────────────────
+            chunks = split_into_chunks(req.text, max_chars=MAX_CHUNK_CHARS)
+            total  = len(chunks)
+            yield _sse("start", total_chunks=total)
+            logger.info("chunked into %d parts len=%d", total, len(req.text))
 
-            text = req.text
+            # ── 2. normalize all chunks in parallel ───────────────────────
             if req.normalize:
-                yield _sse("progress", msg="Normalizing with Gemma…")
-                text = await normalizer.normalize(text, model=req.model)
-                logger.debug("normalized: %r → %r", req.text[:40], text[:40])
-                yield _sse("normalized", text=text)
+                yield _sse("progress", msg=f"Normalizing {total} chunk(s) with Gemma…", total_chunks=total)
+                norm_results = await asyncio.gather(
+                    *[normalizer.normalize(c, model=req.model) for c in chunks]
+                )
+                norm_chunks = list(norm_results)
+                yield _sse("normalized_all",
+                           chunks=[{"index": i, "text": t} for i, t in enumerate(norm_chunks)])
+            else:
+                norm_chunks = chunks
 
-            yield _sse("progress", msg="Synthesizing speech with edge-tts…")
-            audio_path = await synthesize(text, slow=req.slow, voice=req.voice)
-            audio_id = store_audio(audio_path)
+            # ── 3. synthesize each chunk, stream per-chunk progress ───────
+            audio_paths: list[str] = []
+            for i, norm_chunk in enumerate(norm_chunks):
+                pct = int(i / total * 100)
+                yield _sse("chunk_start", chunk=i + 1, total=total, percent=pct,
+                           preview=norm_chunk[:60])
+                path = await synthesize(norm_chunk, slow=req.slow, voice=req.voice)
+                audio_paths.append(path)
+                yield _sse("chunk_done", chunk=i + 1, total=total,
+                           percent=int((i + 1) / total * 100))
 
-            yield _sse("ready", audio_id=audio_id)
+            # ── 4. merge chunks ───────────────────────────────────────────
+            if total > 1:
+                yield _sse("progress", msg=f"Merging {total} audio chunks…")
+            final_path = await merge_audio(audio_paths)
+
+            audio_id = store_audio(final_path)
+            yield _sse("ready", audio_id=audio_id, total_chunks=total)
             yield _sse("done")
 
         except Exception as exc:
