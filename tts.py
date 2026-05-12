@@ -127,7 +127,7 @@ def _cli() -> None:
         epilog="""examples:
   python tts.py "আমার সোনার বাংলা"
   python tts.py "আমার সোনার বাংলা" -o output.mp3
-  python tts.py --model gemma3 "আজকের তারিখ ১২-০৫-২০২৬"
+  python tts.py --model gemma4 "আজকের তারিখ ১২-০৫-২০২৬"
   GEMMA_MODEL=gemma4 python tts.py "বাংলাদেশ"
 """,
     )

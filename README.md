@@ -1,6 +1,6 @@
 # bangla-tts-gemma
 
-Production-grade Bangla (Bengali) Text-to-Speech system — **Gemma 3** normalises text via Ollama, **Microsoft edge-tts** synthesises neural audio, streamed live over SSE.
+Production-grade Bangla (Bengali) Text-to-Speech system — **Gemma 4** (8B) normalises text via Ollama, **Microsoft edge-tts** synthesises neural audio, streamed live over SSE.
 
 ## Architecture
 
@@ -13,7 +13,7 @@ Nginx :80
   ├── /api/*     → FastAPI backend     (8000)
   └── /api/tts/stream  (SSE, buffering off)
                           │
-                          ├── Ollama :11434  (gemma3:4b — normalisation)
+                          ├── Ollama :11434  (gemma4 8B — normalisation)
                           └── edge-tts       (Microsoft Neural TTS — synthesis)
 ```
 
@@ -33,7 +33,7 @@ Key behaviours:
 cp .env.example .env          # edit if needed
 
 # 2. Pull the Gemma model (one-time, ~3 GB)
-ollama pull gemma3:4b
+ollama pull gemma4
 
 # 3. Start the stack
 docker compose up --build
@@ -42,7 +42,7 @@ docker compose up --build
 open http://localhost
 ```
 
-> Requires Docker ≥ 24 and a locally installed Ollama with `gemma3:4b` already pulled.  
+> Requires Docker ≥ 24 and a locally installed Ollama with `gemma4` already pulled.  
 > The compose file mounts `~/.ollama` into the container so the model is not re-downloaded.
 
 ---
@@ -52,7 +52,7 @@ open http://localhost
 | Variable | Default | Description |
 | --- | --- | --- |
 | `OLLAMA_HOST` | `http://localhost:11434` | Ollama base URL (overridden to `http://ollama:11434` in Docker) |
-| `GEMMA_MODEL` | `gemma3:4b` | Ollama model used for normalisation |
+| `GEMMA_MODEL` | `gemma4` | Ollama model used for normalisation |
 | `WORKERS` | `4` | Gunicorn worker count |
 | `LOG_LEVEL` | `info` | Uvicorn log level |
 | `RATE_LIMIT` | `30/minute` | Per-IP rate limit (slowapi) |
@@ -69,7 +69,7 @@ All endpoints are reachable at `http://localhost/api/` (via Nginx).
 ```json
 {
   "text":      "আজকের তারিখ ১২-০৫-২০২৬",
-  "model":     "gemma3:4b",
+  "model":     "gemma4",
   "normalize": true,
   "slow":      false,
   "voice":     "bn-BD-NabanitaNeural"
@@ -108,7 +108,7 @@ Returns the merged `audio/mpeg` file. Valid for **5 minutes** after generation.
 ### `POST /api/tts/normalize` — normalise only (no audio)
 
 ```json
-{ "text": "আজকের তারিখ ১২-০৫-২০২৬", "model": "gemma3:4b" }
+{ "text": "আজকের তারিখ ১২-০৫-২০২৬", "model": "gemma4" }
 ```
 
 ### `POST /api/tts` — blocking synthesis (no streaming)
@@ -121,7 +121,7 @@ Same request body as `/tts/stream`; returns `{ "audio_id": "...", "normalized_ch
 {
   "status": "ok",
   "ollama": "ok",
-  "model": "gemma3:4b",
+  "model": "gemma4",
   "cache_size": 12
 }
 ```
@@ -154,7 +154,7 @@ python tts.py "আমার সোনার বাংলা"
 python tts.py "বাংলাদেশ" -o output.mp3
 
 # Specific model
-python tts.py --model gemma3:4b "আজকের তারিখ ১২-০৫-২০২৬"
+python tts.py --model gemma4 "আজকের তারিখ ১২-০৫-২০২৬"
 
 # Skip Gemma normalisation
 python tts.py --no-normalize "বাংলাদেশ"

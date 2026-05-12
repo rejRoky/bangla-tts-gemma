@@ -17,7 +17,7 @@ def test_root():
 
 def test_health_returns_200():
     with patch("app.routes.health.ollama.AsyncClient") as mock_cls:
-        mock_cls.return_value.list = AsyncMock(return_value={"models": [{"name": "gemma3:4b"}]})
+        mock_cls.return_value.list = AsyncMock(return_value={"models": [{"name": "gemma4"}]})
         r = client.get("/health")
     assert r.status_code == 200
     data = r.json()

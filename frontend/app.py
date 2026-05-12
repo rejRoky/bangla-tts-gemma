@@ -50,7 +50,7 @@ with st.sidebar:
     voice_label = st.selectbox("Voice", list(voice_map.keys()), index=0)
     voice = voice_map[voice_label]
 
-    model   = st.text_input("Gemma model", value="gemma3:4b")
+    model   = st.text_input("Gemma model", value="gemma4")
     slow    = st.checkbox("Slow speech")
     do_norm = st.checkbox("Normalize with Gemma", value=True,
                           help="Expand numbers, abbreviations before synthesis")

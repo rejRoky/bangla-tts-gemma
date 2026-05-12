@@ -4,7 +4,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     # Ollama
     ollama_host: str = "http://localhost:11434"
-    gemma_model: str = "gemma3:4b"
+    gemma_model: str = "gemma4"
 
     # gTTS
     gtts_lang: str = "bn"
