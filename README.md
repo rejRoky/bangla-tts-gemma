@@ -17,8 +17,12 @@ Nginx :80
                           └── edge-tts       (Microsoft Neural TTS — synthesis)
 ```
 
-Clean Bangla text (no digits, Latin, abbreviations) **skips Gemma entirely** — response under 1 s.  
-Multi-chunk requests are processed **fully in parallel** via `asyncio.Queue`; N chunks take the time of 1 chunk.
+Key behaviours:
+
+- Clean Bangla (no digits / Latin / abbreviations) **skips Gemma entirely** — response under 1 s
+- Long text is split on `।`, `.`, `?`, `!`, `\n\n` into ≤ 400-char chunks, processed **fully in parallel**
+- Audio **auto-plays** in the browser the moment synthesis is ready
+- Audio files are stored on disk so all gunicorn workers can serve the same result
 
 ---
 
