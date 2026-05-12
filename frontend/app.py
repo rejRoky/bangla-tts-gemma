@@ -1,11 +1,13 @@
 """Bangla TTS — Streamlit frontend with SSE streaming."""
 
+import base64
 import json
 import os
 import urllib.parse
 
 import requests
 import streamlit as st
+import streamlit.components.v1 as components
 
 API_URL = os.environ.get("API_URL", "http://localhost:8000")
 
@@ -168,7 +170,15 @@ if generate:
                     with st.expander(f"Normalized text ({len(norm_chunks)} chunk(s))"):
                         for i, c in enumerate(norm_chunks, 1):
                             st.markdown(f"**{i}.** {c}")
-                st.audio(audio_resp.content, format="audio/mp3")
+                audio_b64 = base64.b64encode(audio_resp.content).decode()
+                components.html(
+                    f"""
+                    <audio controls autoplay style="width:100%;margin-top:0.5rem">
+                      <source src="data:audio/mpeg;base64,{audio_b64}" type="audio/mpeg">
+                    </audio>
+                    """,
+                    height=60,
+                )
                 st.download_button(
                     "Download MP3",
                     data=audio_resp.content,

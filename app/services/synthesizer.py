@@ -18,36 +18,53 @@ VOICES = {
 }
 DEFAULT_VOICE = "bn-BD-NabanitaNeural"
 
-# ── audio result cache (TTL = 5 min) ─────────────────────────────────────────
+# ── audio result store — filesystem-backed so all gunicorn workers can share ──
 
-_TTL = 300
-_audio_store: dict[str, tuple[str, float]] = {}  # id → (path, expires_at)
+_TTL = 300  # seconds
+_AUDIO_DIR = os.path.join(tempfile.gettempdir(), "btts_audio")
+os.makedirs(_AUDIO_DIR, exist_ok=True)
+
+
+def _audio_path(audio_id: str) -> str:
+    return os.path.join(_AUDIO_DIR, f"{audio_id}.mp3")
 
 
 def store_audio(path: str) -> str:
     audio_id = secrets.token_urlsafe(12)
-    _audio_store[audio_id] = (path, time.monotonic() + _TTL)
+    dest = _audio_path(audio_id)
+    os.replace(path, dest)
     _evict_expired()
     return audio_id
 
 
 def pop_audio(audio_id: str) -> str | None:
-    entry = _audio_store.get(audio_id)
-    if entry and entry[1] > time.monotonic():
-        return entry[0]
-    _audio_store.pop(audio_id, None)
-    return None
+    # Validate token shape to prevent path traversal
+    if not audio_id.replace("-", "").replace("_", "").isalnum():
+        return None
+    p = _audio_path(audio_id)
+    if not os.path.exists(p):
+        return None
+    if time.time() - os.path.getmtime(p) > _TTL:
+        try:
+            os.unlink(p)
+        except OSError:
+            pass
+        return None
+    return p
 
 
 def _evict_expired() -> None:
-    now = time.monotonic()
-    expired = [k for k, (_, exp) in _audio_store.items() if exp <= now]
-    for k in expired:
-        path, _ = _audio_store.pop(k)
-        try:
-            os.unlink(path)
-        except OSError:
-            pass
+    now = time.time()
+    try:
+        for fname in os.listdir(_AUDIO_DIR):
+            fp = os.path.join(_AUDIO_DIR, fname)
+            try:
+                if now - os.path.getmtime(fp) > _TTL:
+                    os.unlink(fp)
+            except OSError:
+                pass
+    except OSError:
+        pass
 
 
 # ── edge-tts (primary — async, Microsoft Neural) ──────────────────────────────
