@@ -199,6 +199,12 @@ python tts.py --slow "আমার সোনার বাংলা"
 
 ---
 
+## Author
+
+**Rejaul Islam Roky** — [github.com/rejRoky](https://github.com/rejRoky) · [rejaul.islam.roky@gmail.com](mailto:rejaul.islam.roky@gmail.com)
+
+---
+
 ## License
 
-MIT
+MIT — see [LICENSE](LICENSE)
