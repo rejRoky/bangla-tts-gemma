@@ -1,66 +1,203 @@
 # bangla-tts-gemma
 
-Bangla (Bengali) Text-to-Speech powered by **Gemma** (text normalisation via Ollama) and **gTTS** (speech synthesis).
+Production-grade Bangla (Bengali) Text-to-Speech system — **Gemma 3** normalises text via Ollama, **Microsoft edge-tts** synthesises neural audio, streamed live over SSE.
 
-## How it works
+## Architecture
 
+```text
+Browser
+  │
+  ▼
+Nginx :80
+  ├── /          → Streamlit frontend  (8501)
+  ├── /api/*     → FastAPI backend     (8000)
+  └── /api/tts/stream  (SSE, buffering off)
+                          │
+                          ├── Ollama :11434  (gemma3:4b — normalisation)
+                          └── edge-tts       (Microsoft Neural TTS — synthesis)
 ```
-Bangla text → Gemma (Ollama) normalises → gTTS synthesises → MP3 audio
-```
 
-Gemma expands numerals, abbreviations, and cleans mixed-script text before passing to gTTS which supports Bangla (`bn`) natively.
+Clean Bangla text (no digits, Latin, abbreviations) **skips Gemma entirely** — response under 1 s.  
+Multi-chunk requests are processed **fully in parallel** via `asyncio.Queue`; N chunks take the time of 1 chunk.
 
-## Requirements
+---
 
-- Python 3.10+
-- [Ollama](https://ollama.com) running locally
-- Internet connection (for gTTS synthesis)
-
-## Setup
+## Quick start (Docker)
 
 ```bash
-# 1. Install dependencies
-bash setup.sh
+# 1. Copy env template
+cp .env.example .env          # edit if needed
 
-# 2. Activate virtual environment
-source .venv/bin/activate
+# 2. Pull the Gemma model (one-time, ~3 GB)
+ollama pull gemma3:4b
+
+# 3. Start the stack
+docker compose up --build
+
+# 4. Open the app
+open http://localhost
 ```
 
-## Usage
+> Requires Docker ≥ 24 and a locally installed Ollama with `gemma3:4b` already pulled.  
+> The compose file mounts `~/.ollama` into the container so the model is not re-downloaded.
+
+---
+
+## Environment variables (`.env`)
+
+| Variable | Default | Description |
+| --- | --- | --- |
+| `OLLAMA_HOST` | `http://localhost:11434` | Ollama base URL (overridden to `http://ollama:11434` in Docker) |
+| `GEMMA_MODEL` | `gemma3:4b` | Ollama model used for normalisation |
+| `WORKERS` | `4` | Gunicorn worker count |
+| `LOG_LEVEL` | `info` | Uvicorn log level |
+| `RATE_LIMIT` | `30/minute` | Per-IP rate limit (slowapi) |
+| `CACHE_MAXSIZE` | `1024` | LRU cache size for normalisation results |
+
+---
+
+## API reference
+
+All endpoints are reachable at `http://localhost/api/` (via Nginx).
+
+### `POST /api/tts/stream` — SSE streaming synthesis
+
+```json
+{
+  "text":      "আজকের তারিখ ১২-০৫-২০২৬",
+  "model":     "gemma3:4b",
+  "normalize": true,
+  "slow":      false,
+  "voice":     "bn-BD-NabanitaNeural"
+}
+```
+
+Returns `text/event-stream`. Each `data:` line is a JSON event:
+
+| `type` | Fields | Meaning |
+| --- | --- | --- |
+| `start` | `total_chunks`, `normalizing` | Job started |
+| `chunk_norm` | `chunk`, `total`, `preview` | Chunk normalised |
+| `chunk_done` | `chunk`, `total`, `percent` | Chunk synthesised |
+| `ready` | `audio_id`, `total_chunks`, `normalized_chunks` | All done, audio ready |
+| `error` | `msg` | Something went wrong |
+| `done` | — | Stream closed |
+
+### `GET /api/tts/audio/{audio_id}` — fetch audio
+
+Returns the merged `audio/mpeg` file. Valid for **5 minutes** after generation.
+
+### `GET /api/tts/voices` — list voices
+
+```json
+{
+  "voices": {
+    "female-bd": "bn-BD-NabanitaNeural",
+    "male-bd":   "bn-BD-PradeepNeural",
+    "female-in": "bn-IN-TanishaaNeural",
+    "male-in":   "bn-IN-BashkarNeural"
+  },
+  "default": "bn-BD-NabanitaNeural"
+}
+```
+
+### `POST /api/tts/normalize` — normalise only (no audio)
+
+```json
+{ "text": "আজকের তারিখ ১২-০৫-২০২৬", "model": "gemma3:4b" }
+```
+
+### `POST /api/tts` — blocking synthesis (no streaming)
+
+Same request body as `/tts/stream`; returns `{ "audio_id": "...", "normalized_chunks": [...] }`.
+
+### `GET /health`
+
+```json
+{
+  "status": "ok",
+  "ollama": "ok",
+  "model": "gemma3:4b",
+  "cache_size": 12
+}
+```
+
+---
+
+## Bangla voices
+
+| Key | Voice | Language |
+| --- | --- | --- |
+| `female-bd` | bn-BD-NabanitaNeural | Bangladeshi Bangla (F) |
+| `male-bd` | bn-BD-PradeepNeural | Bangladeshi Bangla (M) |
+| `female-in` | bn-IN-TanishaaNeural | Indian Bengali (F) |
+| `male-in` | bn-IN-BashkarNeural | Indian Bengali (M) |
+
+---
+
+## CLI tool (`tts.py`)
+
+Local use without Docker:
 
 ```bash
-# Speak text aloud
+# Install deps
+pip install -r requirements.txt
+
+# Speak text (auto-normalises)
 python tts.py "আমার সোনার বাংলা"
 
 # Save to MP3
 python tts.py "বাংলাদেশ" -o output.mp3
 
-# Use a specific Ollama model
+# Specific model
 python tts.py --model gemma3:4b "আজকের তারিখ ১২-০৫-২০২৬"
 
-# Skip Gemma normalisation (faster, no Ollama needed)
+# Skip Gemma normalisation
 python tts.py --no-normalize "বাংলাদেশ"
 
-# Slower speech rate
+# Slower speech
 python tts.py --slow "আমার সোনার বাংলা"
-
-# Launch Gradio web UI
-python tts.py --ui
 ```
 
-## Environment variable
+---
 
-```bash
-export GEMMA_MODEL=gemma3:4b   # default model name
+## Project structure
+
+```text
+.
+├── app/
+│   ├── main.py                 # FastAPI app factory, middleware
+│   ├── config.py               # pydantic-settings config
+│   ├── routes/
+│   │   ├── tts.py              # /tts/* endpoints, SSE pipeline
+│   │   └── health.py           # /health
+│   └── services/
+│       ├── normalizer.py       # Gemma via Ollama, LRU cache
+│       ├── synthesizer.py      # edge-tts primary, gTTS fallback, audio store
+│       └── chunker.py          # sentence splitter, needs_normalization()
+├── frontend/
+│   ├── app.py                  # Streamlit UI
+│   └── Dockerfile
+├── nginx/
+│   └── nginx.conf
+├── tts.py                      # CLI entry point
+├── Dockerfile                  # API multi-stage build
+├── docker-compose.yml
+├── requirements.txt
+└── .env.example
 ```
 
-## Example
+---
 
-```
-Input  : আজকের তারিখ ১২-০৫-২০২৬ এবং তাপমাত্রা ৩২ ডিগ্রি।
-Gemma  : আজকের তারিখ বারো মে দুই হাজার সাতাশ এবং তাপমাত্রা পঁয়ত্রিশ ডিগ্রি।
-Output : output.mp3
-```
+## Performance
+
+| Input | Normalise | Typical latency |
+| --- | --- | --- |
+| Clean Bangla (no digits/Latin) | skipped | < 1 s |
+| Text with numbers / abbreviations | Gemma | ~3–5 s per chunk |
+| Multi-chunk, parallel | Gemma | ≈ 1 chunk time (all run concurrently) |
+
+---
 
 ## License
 
